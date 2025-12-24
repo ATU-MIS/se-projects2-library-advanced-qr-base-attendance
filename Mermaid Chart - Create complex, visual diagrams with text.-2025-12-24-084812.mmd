@@ -1,0 +1,75 @@
+sequenceDiagram
+    autonumber
+    actor U as Üye (User)
+    participant API as API Gateway
+    participant LS as Loan Service
+    participant MS as Member Service
+    participant BR as Book Repository
+    participant DB as Transaction DB
+    participant NS as Notification Service
+
+    U->>API: 1. Kitap Ödünç İsteği (POST /loan)
+    API->>LS: İsteği İlet (userId, bookId)
+
+    %% ADIM 1: ÜYE KONTROLLERİ
+    rect rgb(240, 248, 255)
+        Note right of LS: Validasyon Bölgesi
+        LS->>MS: getMemberStatus(userId)
+        MS-->>LS: Üye Durumu (Aktif/Pasif, Gecikme Sayısı)
+        
+        alt Üye Pasif veya Cezalı ise
+            LS-->>API: Hata: Hesap Askıda
+            API-->>U: 403 Forbidden
+        else Gecikmiş Kitap VARSA
+            LS-->>API: Hata: Gecikmiş Kitap Bulundu!
+            API-->>U: 400 Bad Request (Önce kitabı teslim et)
+        else Kitap Alma Limiti Doluysa
+            LS-->>API: Hata: Maksimum Kitap Sınırı
+            API-->>U: 400 Bad Request
+        end
+    end
+
+    %% ADIM 2: KİTAP STOK VE KİLİT İŞLEMİ
+    rect rgb(255, 240, 245)
+        Note right of LS: Stok ve Kilit Yönetimi
+        LS->>BR: checkAvailability(bookId)
+        
+        alt Kitap Stokta Yoksa veya Başkası Alıyorsa
+            BR-->>LS: Stok Yetersiz / Rezerve
+            LS-->>API: Hata: Kitap Müsait Değil
+            API-->>U: 404 Not Found / 409 Conflict
+        else Kitap Müsait
+            BR->>BR: LockBook(bookId)
+            Note right of BR: Kitabı başkası alamasın diye kilitledik
+            BR-->>LS: Onay: Kitap Kilitlendi
+        end
+    end
+
+    %% ADIM 3: TRANSCACTION (ASIL İŞLEM)
+    rect rgb(240, 255, 240)
+        Note right of LS: Kritik İşlem Bloğu (Transaction)
+        LS->>BR: updateBookStatus(bookId, "LOANED")
+        LS->>BR: kitapGetir(bookId)
+        BR-->>LS: Kitap Detayları Döner
+        
+        LS->>LS: calculateDueDate(Today + 15 Days)
+        
+        LS->>DB: createLoanRecord(User, Book, Date)
+        
+        alt Veritabanı Hatası Oluşursa
+            DB-->>LS: DB Error
+            LS->>BR: Rollback: UnlockBook(bookId)
+            LS-->>API: Hata: Sistem Hatası
+            API-->>U: 500 Internal Server Error
+        else Kayıt Başarılı
+            DB-->>LS: Success (Transaction Committed)
+        end
+    end
+
+    %% ADIM 4: BİLDİRİM VE BİTİŞ
+    rect rgb(255, 250, 205)
+        LS-)NS: sendEmailAsync(User, "İşlem Başarılı")
+        Note right of NS: Kullanıcıyı bekletmeden (Asenkron) gönderildi
+        LS-->>API: İşlem Başarılı DTO
+        API-->>U: 200 OK (Ödünç Alma Tamamlandı)
+    end
