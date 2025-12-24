@@ -1,0 +1,37 @@
+sequenceDiagram
+    actor Uye as Üye
+    participant LC as GUI / Library Controller
+    participant LS as Loan Service
+    participant MemberRepo as Member Repository
+    participant LoanRepo as Loan Repository
+    participant BookRepo as Book Repository
+
+    Uye ->> LC : odunc_al(isbn)
+    LC ->> LS : odunc_al(uye_id, isbn)
+
+    LS ->> MemberRepo : uyeyi_getir(uye_id)
+    MemberRepo -->> LS : uye
+
+    LS ->> LoanRepo : gecikmis_oduncvarmi(uye_id)
+    LoanRepo -->> LS : bool
+
+    alt Gecikmiş kitap varsa
+        LS -->> LC : hata(gecikmiş kitap var)
+        LC -->> Uye : Ödünç alma işlemi reddedildi
+    else Gecikmiş kitap yok
+        LS ->> BookRepo : Kitap_getir(isbn)
+        BookRepo -->> LS : kitap
+
+        alt Kitap stokta yok
+            LS -->> LC : hata(Kitap stokta yok)
+            LC -->> Uye : Kitap ödünç alınamaz
+        else Kitap stokta var
+            LS ->> LS : uygun_mu(kitap)
+            LS ->> LoanRepo : odunc_kaydi_olustur(uye_id, isbn)
+            LoanRepo -->> LS : odunc_kaydi
+
+            LS ->> BookRepo : kitap_durum_guncelle(isbn, odunc_iste)
+            LS -->> LC : basarili()
+            LC -->> Uye : Ödünç alma işlemi başarılı
+        end
+    end
